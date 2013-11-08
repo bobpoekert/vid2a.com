@@ -15,21 +15,21 @@ class ThreadPool(object):
         self.max_threads = max_threads
 
     def run(self, fn):
+        self.queue.put_nowait(fn)
         with self.lock:
             if (len(self.threads) == 0 or self.queue.qsize() > self.max_qsize) \
                 and len(self.threads) < self.max_threads:
                 self.spawn_thread()
-            self.queue.put_nowait(fn)
 
     def spawn_thread(self):
+        thread = None
+        def get_thread():
+            return thread
+        thread = threading.Thread(target=self.work, args=(get_thread,))
+        thread.daemon = True
+        thread.start()
         with self.lock:
-            thread = None
-            def get_thread():
-                return thread
-            thread = threading.Thread(target=self.work, args=(get_thread,))
-            thread.daemon = True
             self.threads.add(thread)
-            thread.start()
 
     def on_error(self):
         traceback.print_exc()
