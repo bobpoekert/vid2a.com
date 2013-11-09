@@ -12,7 +12,7 @@ downloader.add_default_info_extractors()
 def get_video_meta(page_url):
     meta = downloader.extract_info(page_url, download=False)
     try:
-        return [e for e in meta['entries'] if e.get('url')][-1]
+        return [e for e in meta['entries'] if e.get('url')][0]
     except KeyError:
         return meta
 

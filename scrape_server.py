@@ -33,6 +33,24 @@ m3u_template = '''
 
 '''
 
+html5_template = '''
+<html>
+<head><title>%(title)s</title>
+<body style="text-align: center;">
+<div style="display: inline-block">
+<p>%(title)s</p>
+<audio autoplay="autoplay" controls id="player">
+<source src="%(url)s">
+</audio>
+</div>
+<script>
+document.getElementById('player').addEventListener('ended', function(evt) {
+    evt.target.outerHTML = evt.target.outerHTML;
+});
+</script>
+</body></html>
+'''
+
 class after(object):
 
     def __init__(self, *args, **kwargs):
@@ -83,12 +101,9 @@ class PlaylistHandler(web.RequestHandler):
             self.got_meta(None)
             return
         key = new_url(meta['url'])
-        meta['url'] = 'http://%s/stream/%s?length=%s&title=%s&author=%s' % (
+        meta['url'] = 'http://%s/stream/%s' % (
             machine_hostname, # we want the same IP doing both requests
-            key,
-            meta['duration'],
-            meta.get('title'),
-            meta.get('uploader'))
+            key)
         self.got_meta(meta)
 
     @in_ioloop
@@ -96,50 +111,53 @@ class PlaylistHandler(web.RequestHandler):
         if not meta:
             self.send_error(404)
             return
-        #self.set_header('Content-Type', 'application/x-mpegurl')
-        #self.write(m3u_template % meta)
-        self.redirect(meta['url'])
-        #self.finish()
+        self.set_header('Content-Type', 'text/html')
+        self.write(html5_template % meta)
+        #self.redirect(meta['url'])
+        self.finish()
+
+streams = {}
 
 class StreamHandler(web.RequestHandler):
 
     @web.asynchronous
     def get(self, key):
-        print 'headers', repr(self.request.headers)
+        print self.request
+        self.key = key
         try:
-            video_url = get_url(key)
+            self.video_url = get_url(key)
         except KeyError:
             self.send_error(404)
             return
 
-        bitrate = 32 * 1000
-        length = int(self.get_argument('length', 0))
-        self.stream = transcode.stream_mp3(video_url,
-            bitrate=bitrate,
-            duration=length,
+        self.bitrate = 32 * 1000
+        self.length = int(self.get_argument('length', 0))
+        self.stream = self.get_stream()
+        self.set_header('Content-Type', 'audio/mpeg')
+        if self.length:
+            self.set_header('Content-Length', str(self.bitrate / 8 * self.length))
+        self.stream.on_chunk(self.write_stream)
+        self.stream.on_finish(self.done)
+
+    def get_stream(self):
+        stream = streams.get(self.key)
+        if stream:
+            return stream
+        stream = transcode.stream_mp3(self.video_url,
+            bitrate=self.bitrate,
+            duration=self.length,
             title=self.get_argument('title', None),
             author=self.get_argument('author', None))
-        self.set_header('Content-Type', 'audio/mpeg')
-        if length:
-            self.set_header('Content-Length', str(bitrate / 8 * length)) 
-        self.set_header('Accept-Ranges', 'bytes') # this is a lie to trick quicktime into seeking
-        self.stream.output.read_until_close(
-            self.done,
-            streaming_callback=self.write_stream)
+        streams[self.key] = stream
+        return stream
 
-    def done(self, arg):
-        print arg
+    def done(self):
         self.finish()
+        del streams[self.key]
 
     def write_stream(self, chunk):
         self.write(chunk)
         self.flush()
-
-    def on_finish(self):
-        try:
-            self.stream.res_close()
-        except AttributeError:
-            pass
 
 index_page = open('index.html', 'r').read()
 class RootHandler(web.RequestHandler):
@@ -156,11 +174,11 @@ Disallow: /
 ''')
 
 app = web.Application([
+    ('/robots.txt', RobotHandler),
     ('/stream/(.*?)', StreamHandler),
     ('/(.+)', PlaylistHandler),
-    ('/robots.txt', RobotHandler),
     ('/', RootHandler)
-], debug=debug)
+], debug=True)
 
 if __name__ == '__main__':
     from tornado.httpclient import AsyncHTTPClient
